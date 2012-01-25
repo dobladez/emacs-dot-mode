@@ -1,6 +1,7 @@
 ;;; dot-mode.el - minor mode to repeat typing or commands
 ;;; Copyright (C) 1995 James Gillespie
 ;;; Copyright (C) 2000 Robert Wyrick (rob@wyrick.org)
+;;; Copyright (C) 2012 by (fernando@dobladez.com)
 ;;
 ;; Purpose of this package: minor mode to repeat typing or commands
 ;;
@@ -65,7 +66,7 @@
 ;;          changes the buffer and regardless of the value of the
 ;;          dot-mode-ignore-undo variable.
 ;;
-;; `C-c-.'  is bound to dot-mode-copy-to-last-kbd-macro, which will
+;; `C-S-.'  is bound to dot-mode-copy-to-last-kbd-macro, which will
 ;;          copy the current dot mode keyboard macro to the last-kbd-macro
 ;;          variable.  It can then be executed via call-last-kbd-macro
 ;;          (normally bound to `C-x-e'), named via name-last-kbd-macro,
@@ -111,7 +112,7 @@
 ;;; and two corresponding override states which allow the user to
 ;;; forcibly store commands which do not change the buffer.
 
-(defconst dot-mode-version "1.11"
+(defconst dot-mode-version "1.12"
   "Report bugs to: Robert Wyrick <rob@wyrick.org>")
 
 ;;; CHANGE HISTORY
@@ -194,6 +195,13 @@
 ;;; dot-mode-override to record a <right> and then tried to call
 ;;; dot-mode-execute.  The bug was in dot-mode-event-to-string
 ;;; Thanks to Scott Evans <gse@antisleep.com> for reporting the bug!
+;;;
+;;; 1.12
+
+;;; Made compatible with Emacs 24.
+;;; Change of behavior: pointer now stays were it was when "dot-mode-execute" started
+;;; (this is *not* how VI does it, but I like it much better)
+;;; Change some default bindings
 
 (defvar dot-mode nil
   "Whether dot mode is on or not")
@@ -205,12 +213,12 @@
         (progn
           (define-key map (read-kbd-macro "C-.")   'dot-mode-execute)
           (define-key map (read-kbd-macro "C-M-.") 'dot-mode-override)
-          (define-key map (read-kbd-macro "C-c .") 'dot-mode-copy-to-last-kbd-macro)
+          (define-key map (read-kbd-macro "C->") 'dot-mode-copy-to-last-kbd-macro)
         )
       ;; ELSE - try this way...
       (define-key map [(control ?.)]         'dot-mode-execute)
       (define-key map [(control meta ?.)]    'dot-mode-override)
-      (define-key map [(control ?c)(?.)]     'dot-mode-copy-to-last-kbd-macro)
+      (define-key map [(control ?>)]     'dot-mode-copy-to-last-kbd-macro)
     )
     map)
   "Keymap used in dot mode buffers")
@@ -357,29 +365,33 @@ or even saved for later use with name-last-kbd-macro"
     (remove-hook 'pre-command-hook 'dot-mode-pre-hook t)
     (remove-hook 'post-command-hook 'dot-mode-loop t)
     (remove-hook 'after-change-functions 'dot-mode-after-change t)
+
     ;; Do the business
-    (message "Repeating \"%s\"" (dot-mode-buffer-to-string))
-     (condition-case nil
-        (execute-kbd-macro dot-mode-cmd-buffer)
-      ((error quit exit)
-       (setq dot-mode-cmd-buffer nil
-             dot-mode-state      0)
-       (message "Dot mode reset")))
-    (if (not (null dot-mode-cmd-buffer))
-        ;; I message before AND after a macro execution.
-        ;; On XEmacs, I never saw the Repeating message above...
-        ;; Besides, this way you'll know if your macro somehow
-        ;; hangs during execution (on GNU Emacs, anyway).
-        (message "Repeated \"%s\"" (dot-mode-buffer-to-string)))
+    (if dot-mode-keep-cursor-position
+        (save-excursion (dot-mode-execute--do-it))
+      (dot-mode-execute--do-it))
+
     ;; Put the hooks back
-    (make-local-hook 'pre-command-hook)
-    (make-local-hook 'post-command-hook)
-    (make-local-hook 'after-change-functions)
     (add-hook 'pre-command-hook 'dot-mode-pre-hook nil t)
     (add-hook 'post-command-hook 'dot-mode-loop nil t)
     (add-hook 'after-change-functions 'dot-mode-after-change nil t)
   )
 )
+
+(defun dot-mode-execute--do-it ()
+  (message "Repeating \"%s\"" (dot-mode-buffer-to-string))
+  (condition-case nil
+      (execute-kbd-macro dot-mode-cmd-buffer)
+    ((error quit exit)
+     (setq dot-mode-cmd-buffer nil
+           dot-mode-state      0)
+     (message "Dot mode reset")))
+  (if (not (null dot-mode-cmd-buffer))
+      ;; I message before AND after a macro execution.
+      ;; On XEmacs, I never saw the Repeating message above...
+      ;; Besides, this way you'll know if your macro somehow
+      ;; hangs during execution (on GNU Emacs, anyway).
+      (message "Repeated \"%s\"" (dot-mode-buffer-to-string))))
 
 (defun dot-mode-override ()
   "Override standard behaviour and store next keystroke no matter what."
@@ -448,8 +460,8 @@ or even saved for later use with name-last-kbd-macro"
    (dot-mode-changed            ;; on override, dot-mode-changed is t
     ;; Always read the keys here on override _UNLESS_ it's a quoted-insert.
     ;; This is to make sure we capture keys that don't change the buffer.
-    ;; On quoted-insert, all we get here is , but in dot-mode-after-change,
-    ;; we get  plus the following key (and we're guaranteed to change the
+    ;; On quoted-insert, all we get here is  , but in dot-mode-after-change,
+    ;; we get   plus the following key (and we're guaranteed to change the
     ;; buffer)
     (setq dot-mode-cmd-keys (or (eq this-command 'quoted-insert)
                                 (dot-mode-command-keys)))
@@ -511,9 +523,6 @@ than just `.'."
       )
     ;; ELSE
     ;; The hooks are _ALWAYS_ local since dot-mode may not be on in every buffer
-    (make-local-hook 'pre-command-hook)
-    (make-local-hook 'post-command-hook)
-    (make-local-hook 'after-change-functions)
     (add-hook 'pre-command-hook 'dot-mode-pre-hook nil t)
     (add-hook 'post-command-hook 'dot-mode-loop nil t)
     (add-hook 'after-change-functions 'dot-mode-after-change nil t)
@@ -549,6 +558,24 @@ than just `.'."
   (dot-mode 1))
 
 (defalias 'turn-on-dot-mode 'dot-mode-on)
+
+
+
+
+;;; customization
+(defgroup dot-mode nil
+  "Mode for repeating the last typing or commands (similar to VI's . (dot) command"
+  :group 'convenience
+  :version dot-mode-version)
+
+(defcustom dot-mode-keep-cursor-position nil
+  "Non-nil (true) means that after repeating a command the cursor is put back where it was
+before repeating the command.
+When nil (false), the cursor stays where the repeated command left it. This is VI's behavior"
+  :type 'boolean
+  :group 'dot-mode)
+
+
 
 (provide 'dot-mode)
 
